@@ -860,7 +860,7 @@ if ( ! HAX.hasLocalStorage ) {
 					var bm = bookmarks[ i ],
 							distance = HAX.dist_cur_town( bm.x, bm.y ),
 							url = '#/World/Map/' + bm.x + '/' + bm.y,
-							link = T.UI.link.clone();
+							link = T.UI.link.clone(), j;
 					link.attr( { href:url, title:bm.title } ).appendTo( T.UI.list );
 					link.find( '.title' ).text( '(' + distance + 'sq) ' + bm.title );
 
