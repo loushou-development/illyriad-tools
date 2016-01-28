@@ -30,7 +30,7 @@ window.HAX = HAX;
 	HAX.toInt = function(val) { var n = parseInt(val); return isNaN(n) ? 0 : n; };
 	HAX.toFloat = function(val) { var n = parseFloat(val); return isNaN(n) ? 0 : n; };
 	HAX.pl = function(n, p) { return HAX.toFloat(n).toFixed(p); };
-	HAX.dist_cur_town = function( x, y ) { var dist_x = ( townX - x ), dist_y = ( townY - y ); return HAX.pl( Math.sqrt( ( dist_x * dist_x ) + ( dist_y + dist_y ) ), 2 ); };
+	HAX.dist_cur_town = function( x, y ) { var dist_x = ( townX - x ), dist_y = ( townY - y ); return HAX.pl( Math.sqrt( ( dist_x * dist_x ) + ( dist_y * dist_y ) ), 2 ); };
 	HAX.isString = function( v ) { return 'string' == typeof v; };
 	HAX.log = function() { var args = [].slice.call( arguments ); args.unshift( 'HAX:' ); console.log.apply( console, args ); };
 	HAX.isIlly = ( function() { return W.location.hostname.match( /illyriad/ ); } )();
