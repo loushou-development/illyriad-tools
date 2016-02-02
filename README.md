@@ -117,7 +117,7 @@ players use Excel or Google spreadsheets to track most of this stuff. That struc
 Bookmark and Square Notes tools. Through further conversation with Millia36 and another player named Gonarr (and a
 short convo with Tachyon) I found that most people also wanted to see a Town Overview, so I built that too.
 
-I also want to thank Mahuat for being a first tester of the tools. With the invaluable feedback I got from that test run
+I also want to thank Mahaut for being a first tester of the tools. With the invaluable feedback I got from that test run
 I was able to improve the tool to a useable state. Also those conversations provided some clarity on where the project
 could be headed, which brought to light some major overhaul points, which turned into a complete rewrite of what I had.
 That all worked out for the best though, because it all works much smoother now.
