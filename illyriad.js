@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name        HaxorOne's Map Bookmarks and Notes
-// @namespace   haxorone.illyriad.bandn
-// @description Allows you to manage a list of bookmarks on Illyriad. Also enables the ability to add a note to any sqaure on the map.
+// @name        HaxorOne's IllyTools
+// @namespace   haxorone.illyriad.illytools
+// @description Enables various tools for helping an Illyriad player inside the game.
 // @version     0.9.0-beta
 // @grant       none
 // @author      HaxorOne
@@ -26,6 +26,7 @@ window.HAX = HAX;
 	var H = 'hasOwnProperty';
 
 	// generic tools
+	HAX.H = H;
 	HAX.is = function( v ) { return 'undefined' != typeof v && null !== v; };
 	HAX.toInt = function(val) { var n = parseInt(val); return isNaN(n) ? 0 : n; };
 	HAX.toFloat = function(val) { var n = parseFloat(val); return isNaN(n) ? 0 : n; };
@@ -201,10 +202,48 @@ window.HAX = HAX;
 		return cb;
 	} )();
 
+	// after any ajax transition, we may want to run a bit of code, based on the url hit
+	HAX.Ajax = ( function() {
+		var cb = HAX.callbacks.get_instance( 'ajax' );
+
+		// function to action intercept the completed ajax event call, and handle the relevant callbacks
+		function handle_complete( e, xhr, settings ) {
+			var i, regexs = Object.keys( cb.get() );
+			// cycle through the register ajax takeovers, and if any match, run their callbacks now
+			for ( i = 0; i < regexs.length; i++ ) {
+				if ( settings.url.match( new RegExp( regexs[ i ] ) ) ) {
+					cb.run( regexs[ i ] );
+				}
+			}
+		}
+
+		// register the callback that intercepts the ajax complete requests
+		$( D ).off( 'ajaxComplete', handle_complete ).on( 'ajaxComplete', handle_complete );
+
+		var intrfc = {
+			// allow the passer to register a function to be called when a given location is hit
+			register: function( regex_str, func, priority ) {
+				// normalize the priority we will use for this callback
+				var priority = priority || '10',
+						func = func || function() {};
+
+				return cb.register( regex_str, func, priority );
+			},
+
+			// allow the passer to deregister a function
+			deregister: function( regex_str, func, priority ) {
+				var func = func || function() {};
+				return cb.deregister( regex_str, func, priority );
+			}
+		};
+
+		return intrfc;
+	} )();
+
 	// handle location changes when they occur. also allow registration of things to do when locations change
 	HAX.Location = ( function() {
 		// holder for functions to call when certain page locations are reached
-		var cb = HAX.callbacks.get_instance( 'locatin' );
+		var cb = HAX.callbacks.get_instance( 'location' );
 
 		// function to get the location hash of the page we are currently on
 		function get_page_hash() {
@@ -216,6 +255,7 @@ window.HAX = HAX;
 		function on_hash_change() {
 			var hash = get_page_hash();
 			cb.run( hash.core_string );
+			cb.run( '*' );
 		}
 
 		// add the handler to the window that detects the change in hash and calls the appropriate callbacks
@@ -263,30 +303,30 @@ window.HAX = HAX;
 		return intrfc;
 	} )();
 
-	/* when the normal tooltip pops up, we may have overrides or additions to it. this code handles that manipulation */
-	HAX.Tip = ( function() {
-		var orig_tip = W.Tip,
-				cb = HAX.callbacks.get_instance( 'tip' );
+	/* generic function to override a defined global function */
+	HAX._Override = function( func_name, run_func ) {
+		var orig = W[ func_name ],
+				cb = HAX.callbacks.get_instance( func_name );
 
-		// override the Tip() function so we can inject new links in the tooltips
-		W.Tip = function() {
-			var args = [].slice.call( arguments );
+		// override the global function called W[ func_name ]
+		W[ func_name ] = function() {
+			var args = [].slice.call( arguments ),
+					call_args = args.slice( 0 );
 
-			// maybe augment the html
-			if ( '' !== args[0] ) {
-				var bms_obj = HAX.BMs.get_instance(),
-						html = $( '<div>' + args[0] + '</div>' );
+			call_args.unshift( cb );
+			// add the original function args to the list of args to send to the override function
+			call_args.unshift( args );
+			// add a function to the front of the args list, that the override function can call to run the cbs that are registered
+			call_args.unshift( function() {
+				var inner_args = [].slice.call( arguments );
+				cb.run( 'override-' + func_name, inner_args );
+			} );
 
-				// run all attached callbacks
-				cb.run( 'draw-tip', [ html ] );
+			// call the override function
+			run_func.apply( this, call_args );
 
-				// convert the results back to an html string
-				args[0] = html.html();
-			}
-
-			// pass through to original function
-			return orig_tip.apply( this, args );
-		}
+			return orig.apply( this, args );
+		};
 
 		var intrfc = {
 			// allow the passer to register a function to be called when a given location is hit
@@ -295,18 +335,149 @@ window.HAX = HAX;
 				var priority = priority || '10',
 						func = func || function() {};
 
-				return cb.register( 'draw-tip', func, priority );
+				return cb.register( 'override-' + func_name, func, priority );
 			},
 
 			// allow the passer to deregister a function
 			deregister: function( func, priority ) {
 				var func = func || function() {};
-				return cb.deregister( 'draw-tip', func, priority );
+				return cb.deregister( 'override-' + func_name, func, priority );
+			}
+		};
+
+		return intrfc;
+	}
+
+	/* when the normal tooltip pops up, we may have overrides or additions to it. this code handles that manipulation */
+	HAX.Tip = HAX._Override( 'Tip', function( run, args ) {
+		var bms_obj = HAX.BMs.get_instance(),
+				html = $( '<div>' + args[0] + '</div>' );
+
+		// run all attached callbacks
+		run.apply( this, [ html ] );
+
+		// convert the results back to an html string
+		args[0] = html.html();
+	} );
+
+	/* takeover the function that updates all the basic resources on a tick. we need to inject a bit of code that updates all town counts stored in memory */
+	HAX.SetRes = HAX._Override( 'setRes', function( run, args ) {
+		run.apply( this, args );
+	} );
+
+	/* take over the function that updates the nextevents progressbars, and allow our code to inject functionality when that tick happens */
+	HAX.SetNextEventsProgress = HAX._Override( 'setNextEventsProgress', function( run, args, cb ) {
+		run.apply( this, args );
+	} );
+
+	// add a new menu near the top left of the page, which we can add icons to on a whim
+	HAX.Menu = ( function() {
+		// container for the menu items we have registered
+		var menu_items = [],
+				box,
+				index = 0;
+
+		// normalize the args sent for menu item registration
+		function _normalize( args, key ) {
+			return $.extend( true, {
+				key: key,
+				label: key,
+				icon: '<div class="icon">' + key.substr( 0, 1 ).toUpperCase() + '</div>',
+				order: index++,
+				events: { click:function() { HAX.log( 'click' ); } }
+			}, args );
+		}
+
+		// get the menu container
+		function get_box() {
+			// if the box is not yet defined, add it to the DOM
+			if ( ! HAX.is( box ) || ! HAX.is( box.length ) || ! box.length || ! box.find( '.h1f-menu' ).length ) {
+				box = $( '<div id="h1f-menu-wrap">'
+						+ '<style>'
+						+ '#h1f-menu-wrap { position:absolute; z-index:1000; top:110px; left:148px; overflow:visible; }'
+						+ '#h1f-menu-wrap .h1f-menu-container { position:absolute; top:0; right:0; max-width:112px; height:auto; background-color:#08f; }'
+						+ '#h1f-menu-wrap .h1f-menu { margin:2px 2px 0 0; font-size:9px; }'
+						+ '#h1f-menu-wrap .h1f-menu:empty { margin:0; }'
+						+ '#h1f-menu-wrap .ico { width:16px; height:16px; background-color:#000; color:#fff; font-weight:700; line-height:16px; text-align:center; margin:0 0 2px 2px; '
+								+ 'cursor:pointer; float:right; clear:none; }'
+						+ '#h1f-menu-wrap .ico:hover { background-color:#ccc; color:#000; }'
+						+ '</style>'
+						+ '<div class="h1f-menu-container">'
+							+ '<div class="h1f-menu"></div>'
+						+ '</div>'
+						+ '<div class="h1f-clear"></div>'
+					+ '</div>' ).appendTo( 'body' );
+			}
+
+			return box.find( '.h1f-menu' );
+		}
+
+		// sort the list of menu items, by their order, and return the sorted list
+		function get_sorted_items() {
+			return menu_items.slice( 0 ).sort( function( a, b ) { return a.order - b.order; } );
+		}
+
+		// refresh the mneu display
+		function refresh_menu() {
+			var menu = get_box().empty(),
+					items = get_sorted_items(), i;
+			for ( i = 0; i < items.length; i++ ) {
+				var icon = $( '<div class="ico"></div>' ).attr( 'title', items[ i ].label ).appendTo( menu );
+				$( items[ i ].icon ).clone( true ).appendTo( icon );
+				if ( items[ i ].events )
+					icon.on( items[ i ].events );
+			}
+		}
+
+		// refresh the menu on every ajax call
+		//HAX.Ajax.register( '.*', refresh_menu, 1 );
+		HAX.Location.register( '*', /^.*/, refresh_menu );
+		$( function() { refresh_menu() } );
+
+		// public interface for registering and deregistering menu items
+		var intrfc = {
+			// add a menu item
+			register: function( key, args ) {
+				// normalize the input args
+				var args = _normalize( args, key );
+
+				// add the menu to the list
+				menu_items.push( args );
+
+				return args;
+			},
+
+			// remove a menu item
+			deregister: function( key ) {
+				var tmp_list = menu_items, i;
+				menu_items = [];
+				// if the menu item exists, remove it
+				for ( i = 0; i < tmp_list.length; i++ )
+					if ( tmp_list[ i ].key != key )
+						menu_items.push( tmp_list[ i ] );
+
+				return true;
 			}
 		};
 
 		return intrfc;
 	} )();
+
+	// add the distance to the output of square popups
+	HAX.Tip.register( function( html ) {
+		// find all world map links
+		var wm = html.find( 'a[href^="#/World/Map/"]' ),
+				hr = html.find( 'hr:eq(0)' );
+
+		// if there are any, then
+		if ( wm.length ) {
+			// find the location that this link points to
+			var pos = wm.attr( 'href' ).split( /\// ).slice( 3, 5 ),
+					dist = HAX.pl( $.isArray( pos ) && HAX.is( pos[0] ) && HAX.is( pos[1] ) ? HAX.dist_cur_town( pos[0], pos[1] ) : 0, 2 );
+			if ( dist > 0 )
+				$( '<div class="distance"><strong>Distance:</strong> <em>' + dist + 'sq.</em></div>' ).insertBefore( hr );
+		}
+	} );
 } )( window, document, HAX );
 
 // if this is not the Illy domain, bail
@@ -322,7 +493,7 @@ if ( ! HAX.hasLocalStorage ) {
 
 /* Bookmark UI handler */
 ( function( W, D, HAX ) {
-	var H = 'hasOwnProperty';
+	var H = HAX.H;
 
 	// holder for all the loaded lists of data
 	HAX.Lists = ( function() {
@@ -706,12 +877,18 @@ if ( ! HAX.hasLocalStorage ) {
 			var bmui = $( '<div id="h1fbmui">'
 						+ '<style>'
 						+ '.h1fbm { display:none; }'
+						+ '.h1f-clear { clear:both; }'
+						+ '.h1f-clear::after { display:block; height:0; overflow:hidden; }'
+						+ '.h1f-clear::after { clear:both; display:block; height:0; overflow:hidden; }'
 						+ '.h1fbm h2 { margin-bottom:5px; }'
 						+ '.h1fbm .h1fbl { max-width:60%; width:100%; overflow-x:hidden; overflow-y:auto; height:100%; float:left; clear:none; }'
 						+ '.h1fbm .h1fbl a { display:block; width:100%; padding:0.5em 0.7em; line-height:1.3em; font-size:9px; float:left; clear:none; }'
-						+ '.h1fbm .h1fbl a .inner { width:100%; overflow-x:hidden; }'
+						+ '.h1fbm .h1fbl a .inner { width:100%; overflow-x:hidden; box-sizing:border-box; padding-right:30px; position:relative; }'
 						+ '.h1fbm .h1fbl a .title { white-space:nowrap; width:100%; overflow-x:hidden; }'
 						+ '.h1fbm .h1fbl a .meta { font-style:italic; color:#888; }'
+						+ '.h1fbm .h1fbl a .remove { font-weight:700; color:#800; background-color:#fff; border:1px solid #000; width:11px; height:11px; line-height:12px; text-align:center; '
+							+ 'position:absolute; top:0; right:14px; }'
+						+ '.h1fbm .h1fbl a .remove:hover { color:#f00; }'
 						+ '.h1fbm .h1f-img { float:right; margin:0 0 5px 5px; }'
 						+ '.h1fbm .h1fcb { font-size:9px; white-space:nowrap; width:100%; }'
 						+ '.h1fbm .h1fcb img { display:none; }'
@@ -734,6 +911,7 @@ if ( ! HAX.hasLocalStorage ) {
 								+ '<div class="inner">'
 									+ '<div class="title"></div>'
 									+ '<div class="meta"></div>'
+									+ '<div class="remove">X</div>'
 								+ '</div>'
 							+ '</a>'
 						+ '</script>'
@@ -845,7 +1023,8 @@ if ( ! HAX.hasLocalStorage ) {
 			// populate the links list and thier tags
 			function populate_links( bookmarks ) {
 				// get the list of fields we will display tags for
-				var fields = HAX.BMs.get_instance().get_fields();
+				var bms_obj = HAX.BMs.get_instance(),
+						fields = bms_obj.get_fields();
 
 				// clear out all bookmarks from the current list
 				T.UI.list.empty();
@@ -861,8 +1040,18 @@ if ( ! HAX.hasLocalStorage ) {
 							distance = HAX.dist_cur_town( bm.x, bm.y ),
 							url = '#/World/Map/' + bm.x + '/' + bm.y,
 							link = T.UI.link.clone(), j;
-					link.attr( { href:url, title:bm.title } ).appendTo( T.UI.list );
-					link.find( '.title' ).text( '(' + distance + 'sq) ' + bm.title );
+					( function( bm, link ) {
+						link.attr( { href:url, title:bm.title } ).appendTo( T.UI.list );
+						link.find( '.title' ).text( '(' + distance + 'sq) ' + bm.title );
+						link.find( '.remove' ).on( 'click', function( e ) {
+							e.preventDefault();
+							e.stopPropagation();
+							if ( confirm( 'Are you sure you want to delete "' + bm.title + '"?' ) ) {
+								bms_obj.delete_bookmark( bm.x, bm.y );
+								T.update_list();
+							}
+						} )
+					} )( bm, link );
 
 					var text = [];
 					// add bits for meta also
@@ -1090,7 +1279,7 @@ if ( ! HAX.hasLocalStorage ) {
 
 /* Note taker UI handler */
 ( function( W, D, HAX ) {
-	var H = 'hasOwnProperty';
+	var H = HAX.H;
 
 	// note taker ui namespace
 	HAX.NoteTaker = ( function() {
@@ -1326,6 +1515,538 @@ if ( ! HAX.hasLocalStorage ) {
 
 		return NTUI;
 	} )();
+} )( window, document, HAX );
+
+// the feature that aggregates and displays a city overview
+( function( W, D, HAX ) {
+	var H = HAX.H;
+
+	// keeps track of town resources, builds, and researches
+	HAX.TownTrack = ( function() {
+		var town_stats = {},
+				lvl_prod = {
+					'L0': { lvl:0, food:0, rez:7, tick:7/3600 },
+					'L1': { lvl:1, food:1, rez:7, tick:7/3600 },
+					'L2': { lvl:2, food:1, rez:15, tick:15/3600 },
+					'L3': { lvl:3, food:2, rez:26, tick:26/3600 },
+					'L4': { lvl:4, food:3, rez:40, tick:40/3600 },
+					'L5': { lvl:5, food:4, rez:57, tick:57/3600 },
+					'L6': { lvl:6, food:5, rez:77, tick:77/3600 },
+					'L7': { lvl:7, food:6, rez:100, tick:100/3600 },
+					'L8': { lvl:8, food:7, rez:126, tick:126/3600 },
+					'L9': { lvl:9, food:8, rez:155, tick:155/3600 },
+					'L10': { lvl:10, food:9, rez:197, tick:197/3600 },
+					'L11': { lvl:11, food:10, rez:281, tick:281/3600 },
+					'L12': { lvl:12, food:12, rez:393, tick:393/3600 },
+					'L13': { lvl:13, food:14, rez:538, tick:538/3600 },
+					'L14': { lvl:14, food:16, rez:720, tick:720/3600 },
+					'L15': { lvl:15, food:18, rez:943, tick:943/3600 },
+					'L16': { lvl:16, food:21, rez:1207, tick:1207/3600 },
+					'L17': { lvl:17, food:24, rez:1508, tick:1508/3600 },
+					'L18': { lvl:18, food:28, rez:1839, tick:1839/3600 },
+					'L19': { lvl:19, food:32, rez:2188, tick:2188/3600 },
+					'L20': { lvl:20, food:37, rez:2538, tick:2538/3600 }
+				},
+				// headers for the basic resources table
+				html_basic_headers = '<thead class="basic-headers"><tr class="headers hbasic">'
+						+ '<th res="name"></th>' // Town Name header
+						+ '<th res="[@i=4|1]"></th>' // gold
+						+ '<th res="[@i=1|1]"></th>' // wood
+						+ '<th res="[@i=1|2]"></th>' // clay
+						+ '<th res="[@i=1|3]"></th>' // iron
+						+ '<th res="[@i=1|4]"></th>' // stone
+						+ '<th res="[@i=1|5]"></th>' // food
+						+ '<th res="[@i=2|1]"></th>' // mana
+						+ '<th res="[@i=2|2]"></th>' // research
+					+ '</tr></thead>',
+				// headers for the advanced resources table
+				html_adv_headers = '<thead class="adv-headers"><tr class="headers hbasic">'
+						+ '<th res="name"></th>' // Town Name header
+						+ '<th class="resTxt" res="[@i=3|1]"></th>' // horses
+						+ '<th class="resTxt" res="[@i=3|2]"></th>' // livestock
+						+ '<th class="resTxt" res="[@i=3|12]"></th>' // beer
+						+ '<th class="resTxt" res="[@i=3|7]"></th>' // books
+						+ '<th class="resTxt" res="[@i=3|5]"></th>' // spears
+						+ '<th class="resTxt" res="[@i=3|3]"></th>' // swords
+						+ '<th class="resTxt" res="[@i=3|4]"></th>' // bows
+						+ '<th class="resTxt" res="[@i=3|6]"></th>' // saddles
+						+ '<th class="resTxt" res="[@i=3|8]"></th>' // leather armor
+						+ '<th class="resTxt" res="[@i=3|9]"></th>' // chain armor
+						+ '<th class="resTxt" res="[@i=3|10]"></th>' // plate armor
+						+ '<th class="resTxt" res="[@i=3|11]"></th>' // siege blocks
+					+ '</tr></thead>',
+				// block template for the basic resources table
+				html_basic_blocks = '<tbody><tr class="top vals">'
+						+ '<td rowspan="3" class="name">' // town name
+						+ '<td class="resTxt" res="[@i=4|1]"></td>' // gold
+						+ '<td class="resTxt" res="[@i=1|1]"></td>' // wood
+						+ '<td class="resTxt" res="[@i=1|2]"></td>' // clay
+						+ '<td class="resTxt" res="[@i=1|3]"></td>' // iron
+						+ '<td class="resTxt" res="[@i=1|4]"></td>' // stone
+						+ '<td class="resTxt" res="[@i=1|5]"></td>' // food
+						+ '<td class="resTxt" res="[@i=2|1]"></td>' // mana
+						+ '<td class="resTxt" res="[@i=2|2]"></td>' // research
+					+ '</tr><tr class="mid incs">'
+						+ '<td class="resInc" res="[@i=4|1]"></td>' // gold
+						+ '<td class="resInc" res="[@i=1|1]"></td>' // wood
+						+ '<td class="resInc" res="[@i=1|2]"></td>' // clay
+						+ '<td class="resInc" res="[@i=1|3]"></td>' // iron
+						+ '<td class="resInc" res="[@i=1|4]"></td>' // stone
+						+ '<td class="resInc" res="[@i=1|5]"></td>' // food
+						+ '<td class="resInc" res="[@i=2|1]"></td>' // mana
+						+ '<td class="resInc" res="[@i=2|2]"></td>' // research
+					+ '</tr><tr class="mid times">'
+						+ '<td class="resTime" res="[@i=4|1]"></td>' // gold
+						+ '<td class="resTime" res="[@i=1|1]"></td>' // wood
+						+ '<td class="resTime" res="[@i=1|2]"></td>' // clay
+						+ '<td class="resTime" res="[@i=1|3]"></td>' // iron
+						+ '<td class="resTime" res="[@i=1|4]"></td>' // stone
+						+ '<td class="resTime" res="[@i=1|5]"></td>' // food
+						+ '<td class="resTime" res="[@i=2|1]"></td>' // mana
+						+ '<td class="resTime" res="[@i=2|2]"></td>' // research
+					+ '</tr><tr class="build">'
+						+ '<td >&nbsp;</td>' // spacer
+						+ '<td colspan="8" class="builds"></td>' // builds and techs
+					+ '</tr></tbody>',
+				// block template for the advanced resources table
+				html_adv_blocks = '<tbody><tr class="mid adv-vals advres top">'
+						+ '<td rowspan="2" class="name">' // town name
+						+ '<td class="resTxt" res="[@i=3|1]"></td>' // horses
+						+ '<td class="resTxt" res="[@i=3|2]"></td>' // livestock
+						+ '<td class="resTxt" res="[@i=3|12]"></td>' // beer
+						+ '<td class="resTxt" res="[@i=3|7]"></td>' // books
+						+ '<td class="resTxt" res="[@i=3|5]"></td>' // spears
+						+ '<td class="resTxt" res="[@i=3|3]"></td>' // swords
+						+ '<td class="resTxt" res="[@i=3|4]"></td>' // bows
+						+ '<td class="resTxt" res="[@i=3|6]"></td>' // saddles
+						+ '<td class="resTxt" res="[@i=3|8]"></td>' // leather armor
+						+ '<td class="resTxt" res="[@i=3|9]"></td>' // chain armor
+						+ '<td class="resTxt" res="[@i=3|10]"></td>' // plate armor
+						+ '<td class="resTxt" res="[@i=3|11]"></td>' // siege blocks
+					+ '</tr><tr class="bot adv-incs advres">'
+						+ '<td class="resInc" res="[@i=3|1]"></td>' // horses
+						+ '<td class="resInc" res="[@i=3|2]"></td>' // livestock
+						+ '<td class="resInc" res="[@i=3|12]"></td>' // beer
+						+ '<td class="resInc" res="[@i=3|7]"></td>' // books
+						+ '<td class="resInc" res="[@i=3|5]"></td>' // spears
+						+ '<td class="resInc" res="[@i=3|3]"></td>' // swords
+						+ '<td class="resInc" res="[@i=3|4]"></td>' // bows
+						+ '<td class="resInc" res="[@i=3|6]"></td>' // saddles
+						+ '<td class="resInc" res="[@i=3|8]"></td>' // leather armor
+						+ '<td class="resInc" res="[@i=3|9]"></td>' // chain armor
+						+ '<td class="resInc" res="[@i=3|10]"></td>' // plate armor
+						+ '<td class="resInc" res="[@i=3|11]"></td>' // siege blocks
+					+ '</tr></tbody>';
+
+		// town track guts
+		function TT() {
+			var T = this,
+					box;
+
+			// override the setRes global function, so that we can update the memory stored res counts
+			HAX.SetRes.register( function() {
+				var i, j, k;
+				// cycle through the towns we have on file
+				for ( i in town_stats ) if ( town_stats[ H ]( i ) ) {
+					var stats = town_stats[ i ];
+					// cycle through this town's resources, and run the updates
+					if ( HAX.is( stats.res ) ) for ( j in stats.res ) if ( stats.res[ H ]( j ) )
+						stats.res[ j ].val += stats.res[ j ].chg;
+				}
+
+				var box = T.box(),
+						maxw = HAX.toInt( ( box.outerWidth( true ) / 12 ) * .8 );
+				// update the res counts in our overview
+				box.find( 'td.resTxt' ).each( innerSetRes );
+				// update the storage capacity estimators in our overview
+				box.find( 'td.resTime' ).each( function() {
+					var me = $( this ),
+							end = new Date( HAX.toInt( me.attr( 'end' ) ) ),
+							diff = Math.max( 0, end - HAX.toInt( ( new Date() ).getTime() / 1000 ) );
+					me.find( '> div:eq(0)' ).css( 'width', maxw ).attr( 'title', SecToText( diff ) ).text( SecToText( diff ) );
+				} );
+			} );
+
+			// Override the setNextEventsProgress function, to additionally update the progress bars in our overview
+			HAX.SetNextEventsProgress.register( function() {
+				var box = T.box();
+				box.find( 'span.progTime' ).each( innerSetProgress2 );
+				box.find( 'div.progBarNE' ).each( innerSetNextEventsProgressUpdate );
+			} );
+
+			// get the box that holds the town overview stats
+			T.box = function() {
+				// if the box is not already present, create it
+				if ( ! HAX.is( box ) || ! box || ! HAX.is( box.length ) || ! box.length ) {
+					var pos = HAX.LS.fetch( 'city-overview-location' ) || false,
+							html = '<div id="town-overview-ui">'
+									+ '<style>'
+										+ '.h1f-clear { clear:both; }'
+										+ '.h1f-clear::after { display:block; height:0; overflow:hidden; }'
+										+ '.h1f-clear::after { clear:both; display:block; height:0; overflow:hidden; }'
+										+ '#town-overview-ui .helper { font-style:italic; color:#5c5c5c; font-size:9px; margin-bottom:0.7em; }'
+										+ '#town-overview-ui table { width:100%; }'
+										+ '#town-overview-ui table div { box-sizing:border-box; }'
+										+ '#town-overview-ui table th { text-align:left; }'
+										+ '#town-overview-ui table td.resInc,'
+										+ '#town-overview-ui table td.resTxt { text-align:left; width:50px; max-width:50px; }'
+										+ '#town-overview-ui table td.name div.wrap { position:relative; }'
+										+ '#town-overview-ui table td.name { width:150px; }'
+										+ '#town-overview-ui table td.name div.name { padding-left:15px; width:150px; max-height:33px; }'
+										+ '#town-overview-ui table td.name div.show-hide { width:13px; height:11px; font-weight:700; color:#080; position:absolute; top:0; left:0; text-align:center; }'
+										+ '#town-overview-ui table td.name div.show-hide:hover { background-color:#080; color:#fff; }'
+										+ '#town-overview-ui table tr.top td { padding:3px 6px 0 4px; font-size:9px; border-top:1px solid #542d04; }'
+										+ '#town-overview-ui table tr.build { display:none; }'
+										+ '#town-overview-ui table tr.mid td { padding:1px 6px 0 4px; font-size:8.5px; }'
+										+ '#town-overview-ui table tr.bot td { padding:1px 6px 3px 4px; font-size:9px; }'
+										+ '#town-overview-ui table tr.build td { padding:0; margin:0; }'
+										+ '#town-overview-ui table tr.build td div.build-list { padding:0 0 3px; font-size:9px; }'
+										+ '#town-overview-ui table tr.build td .build-wrap { diaplay:block; float:left; clear:none; padding:0 10px 0 0; width:50%; position:relative; }'
+										+ '#town-overview-ui table tr.build td .tech-wrap { diaplay:block; float:left; clear:none; padding:2px 10px 0 0; width:50%; position:relative; }'
+										+ '#town-overview-ui table tr.build td .tech-wrap .ui-progressbar .ui-widget-header { background:#0f0; }'
+										+ '#town-overview-ui table tr.build td .build-wrap .tytle,'
+										+ '#town-overview-ui table tr.build td .tech-wrap .tytle { font-weight:bold; font-style:italic; text-overflow:hidden; overflow:hidden; white-space:nowrap; }'
+										+ '#town-overview-ui table#town-overview tr td.resIco { padding:0 0 0 2px; }'
+										+ '#town-overview-ui table td.resTime div { height:11px; text-overflow:hidden; overflow:hidden; width:50px; white-space:nowrap; }'
+										+ '#town-overview-ui #advanced-overview .show-hide { display:none; }'
+										+ '#town-overview-ui #advanced-overview td.name div.name { padding-left:0; }'
+										+ '#town-overview-ui .tabs { font-size:9.5px; }'
+										+ '#town-overview-ui .panels .panel { display:none; }'
+										+ '#town-overview-ui .panels .panel:first-child { display:block; }'
+									+ '</style>'
+									+ '<div class="helper">Towns show in this list once they have been visited at least once, this page load.</div>'
+									+ '<div id="town-overview">'
+										+ '<div class="tabs">'
+											+ '<a href="#basic-overview">basic</a> | '
+											+ '<a href="#advanced-overview">advanced</a>'
+										+ '</div>'
+										+ '<div class="panels">'
+											+ '<div id="basic-overview" class="panel">'
+												+ '<table cellpadding="0" cellspacing="0"></table>'
+											+ '</div>'
+											+ '<div id="advanced-overview" class="panel">'
+												+ '<table cellpadding="0" cellspacing="0"></table>'
+											+ '</div>'
+										+ '</div>'
+									+ '</div>'
+								+ '</div>',
+							dia_args = {
+								autoOpen: true,
+								maxWidth: '100%',
+								width: 720,
+								title: 'Town Overview',
+								draggable: true,
+								resizeable: true,
+								dragStop: function() { HAX.LS.store( 'city-overview-location', $( this ).offset() ); }
+							},
+							css = { position:'fixed' };
+
+					// if the position was saved, then load it now
+					if ( pos && $.isPlainObject( pos ) )
+						css = $.extend( css, pos );
+
+					// create the dialog
+					box = $( html ).dialog( dia_args );
+
+					// update the position of the dialog
+					box.closest( '.ui-dialog' ).css( css );
+				}
+
+				return box;
+			}
+
+			// format a positive or negative number
+			function posneg( num, icon, row ) {
+				var sign = ( num > 0 ? '+' : ( num == 0 ? '' : '-' ) ),
+						cls = ( num == 0 ? 'resZero' : ( num < 0 ? 'resFull' : 'resPos' ) ),
+						ele = row.find( '[res="' + icon + '"]' );
+				ele.addClass( cls ).text( sign + Math.abs( num ) );
+			}
+
+			// update the list of cities
+			T.refresh_town_list = function() {
+				var box = T.box(),
+						maxw = HAX.toInt( ( box.outerWidth( true ) / 12 ) * .8 ),
+						basic_table = box.find( '#basic-overview table' ),
+						adv_table = box.find( '#advanced-overview table' );
+
+				// first lest clear out the table completely
+				basic_table.empty();
+				adv_table.empty();
+
+				// if there is no town data, then bail now
+				if ( ! Object.keys( town_stats ).length )
+					return;
+				var first = town_stats[ Object.keys( town_stats ).shift() ], i, j, k, m;
+
+				// first, lets refresh the headers
+				if ( HAX.is( first ) && HAX.is( first.res ) && $.isPlainObject( first.res ) ) {
+					var rows = $( html_basic_headers ).appendTo( basic_table );
+					rows.find( '[res="name"]' ).text( 'Town - Basic' );
+					for ( i in first.res ) if ( first.res[ H ]( i ) )
+						rows.find( '[res="' + first.res[ i ].icon + '"]' ).html( popupifyChat( first.res[ i ].icon, CurRaceId, CurGenderId ) );
+				}
+				if ( HAX.is( first ) && HAX.is( first.advres ) && $.isPlainObject( first.advres ) ) {
+					var rows = $( html_adv_headers ).appendTo( adv_table );
+					rows.find( '[res="name"]' ).text( 'Town - Advanced' );
+					for ( i in first.advres ) if ( first.advres[ H ]( i ) )
+						rows.find( '[res="' + first.advres[ i ].icon + '"]' ).html( popupifyChat( first.advres[ i ].icon, CurRaceId, CurGenderId ) );
+				}
+
+				// next add the towns we know about to the list
+				for ( i in town_stats ) if ( town_stats[ H ]( i ) ) {
+					var stats = town_stats[ i ],
+							d = new goog.i18n.NumberFormat(goog.i18n.NumberFormat.Format.DECIMAL),
+							block = $( html_basic_blocks ).appendTo( basic_table ),
+							block_adv = $( html_adv_blocks ).appendTo( adv_table ),
+							tr = block.find( 'tr.vals' ).attr( 'data-id', i.substr( 1 ) ).data( 'open', 0 ),
+							tr2 = block.find( 'tr.incs' ),
+							tr3 = block.find( 'tr.times' ),
+							tra1 = block_adv.find( 'tr.adv-vals' ),
+							tra2 = block_adv.find( 'tr.adv-incs' ),
+							trb = block.find( 'tr.build' ),
+							bl = $( '<div class="build-list"></div>' ).appendTo( trb.find( 'td.builds' ) ),
+							// add the name column
+							name_col = block.add( block_adv ).find( '.name' ).html(
+									'<div class="wrap">'
+										+ '<div class="show-hide">[+]</div>'
+										+ '<div class="name">' + stats.name + '</div>'
+									+ '</div>'
+								);
+
+					// add the 'show/hide' toggle
+					name_col.find( '.show-hide' ).click( function( e, cur ) {
+						e.preventDefault();
+						e.stopPropagation();
+						var tr = $( this ).closest( 'tr' ),
+								cur = cur || tr.data( 'open' );
+
+						// if the lists are already open, close them
+						if ( cur ) {
+							tr.nextAll( /* 'tr.mid:eq(0),' + /* tr.bot:eq(0), */ 'tr.build:eq(0)' ).hide();
+							tr.data( 'open', 0 );
+							HAX.LS.store( 'open-' + tr.data( 'id' ), 0 );
+						// otherwise open them
+						} else {
+							tr.nextAll( /* 'tr.mid:eq(0),' + /* tr.bot:eq(0), */ 'tr.build:eq(0)' ).show();
+							tr.data( 'open', 1 );
+							HAX.LS.store( 'open-' + tr.data( 'id' ), 1 );
+						}
+					} );
+					name_col.find( '.show-hide' ).trigger( 'click', [ ! HAX.LS.fetch( 'open-' + i.substr( 1 ) ) ] );
+
+					// add columns for each res/advres and res/advres inc
+					var keys = {
+						res: { vals:tr, incs:tr2, times:tr3 },
+						advres: { vals:tra1, incs:tra2, times:$() }
+					};
+					// cycle through the various groups of reses to report on
+					for ( k in keys ) {
+						// cycle through the reses in this group
+						for ( j in stats[ k ] ) if ( stats[ k ][ H ]( j ) && stats[ k ][ H ]( j ) ) {
+							var e = stats[ k ][ j ].val,
+									ico = stats[ k ][ j ].icon;
+							if ( ! stats[ k ][ j ].hasmax || e < stats.maxStorage ) {
+								// format the displayed number
+								e = e > 1e9 ? d.format((e / 1e7 | 0) / 100) + "Bn" : e > 1e6 ? d.format((e / 1e4 | 0) / 100) + "M" : d.format(0 | e)
+
+								// add the displayed current value
+								keys[ k ].vals.find( '[res="' + ico + '"]' ).attr( { k:j, inc:stats[ k ][ j ].chg, data:stats[ k ][ j ].val } ).filter( '.resTxt' ).each( innerSetRes );
+
+								// add the amoutn increased per hour, for reference
+								posneg( stats[ k ][ j ].inc, ico, keys[ k ].incs );
+
+								// add the estimated time to hit the max
+								if ( keys[ k ].times.length ) {
+									if ( stats[ k ][ j ].hasmax && stats[ k ][ j ].inc > 0 ) {
+										var diff = Math.max( 0, HAX.toInt( HAX.toFloat( stats.maxStorage - stats[ k ][ j ].val ) / stats[ k ][ j ].chg ) );
+										keys[ k ].times.find( '[res="' + ico + '"]' ).html( '<div title="' + SecToText( diff ) + '" style="width:' + maxw + 'px">' + SecToText( diff ) + '</div>' )
+												.attr( 'end', HAX.toInt( ( new Date() ).getTime() / 1000 ) + diff );
+									} else if ( stats[ k ][ j ].inc < 0 ) {
+										var diff = Math.max( 0, HAX.toInt( HAX.toFloat( stats[ k ][ j ].val ) / -stats[ k ][ j ].chg ) );
+										keys[ k ].times.find( '[res="' + ico + '"]' ).html( '<div title="' + SecToText( diff ) + '" style="width:' + maxw + 'px">' + SecToText( diff ) + '</div>' )
+												.attr( 'end', HAX.toInt( ( new Date() ).getTime() / 1000 ) + diff );
+									}
+								}
+							} else {
+								tr.find( '[res="' + ico + '"]' ).text( 'max' );
+								tr2.find( '[res="' + ico + '"]' ).text( 'max' );
+								tr3.find( '[res="' + ico + '"]' ).text( 'max' );
+							}
+						}
+					}
+
+					// add the builds to the list container
+					for ( i = 0; i < stats.build.length; i++ ) {
+						var build = stats.build[ i ],
+								build_cont = $( '<div class="build-wrap"></div>' ).appendTo( bl );
+						$( '<div class="tytle"></div>' ).text( build.building + ' to LVL ' + build.level ).appendTo( build_cont );
+						build.time.clone( true ).css( { top:9 } ).appendTo( build_cont )
+						$( '<div class="progBarNE" style="' + build.prog.style + '" data="' + build.prog.data + '"></div>' ).appendTo( build_cont ).each( innerSetNextEventsProgressCreate );
+					}
+					$( '<div class="h1f-clear"></div>' ).appendTo( bl );
+
+					// add the techs to the list container
+					for ( i = 0; i < stats.tech.length; i++ ) {
+						var tech = stats.tech[ i ],
+								tech_cont = $( '<div class="tech-wrap"></div>' ).appendTo( bl );
+						$( '<div class="tytle"></div>' ).text( tech.title ).appendTo( tech_cont );
+						tech.time.clone().css( { top:9 } ).appendTo( tech_cont )
+						$( '<div class="progBarNE" style="' + tech.prog.style + '" data="' + tech.prog.data + '"></div>' ).appendTo( tech_cont ).each( innerSetNextEventsProgressCreate );
+					}
+					$( '<div class="h1f-clear"></div>' ).appendTo( bl );
+				}
+			};
+
+			// update all data about the current town
+			T.track_current_town = function() {
+				var stats = {
+					name: $( '#optTown option[value="' + CurrentTown + '"]' ).text(),
+					maxStorage: maxStorage,
+					res: {},
+					advres: {},
+					build: [],
+					tech: []
+				};
+
+				// find all the basic res and store them
+				$( '#tbRes td.resTxt' ).each( function() {
+					var td = $( this ), inc_tr = td.closest( 'tr' ).next( 'tr' ),
+							pos = td.prevAll( 'td.resTxt' ).length,
+							icon = td.next( 'td.resIco' ).find( '> span.resIcon:eq(0)' );
+
+					// fill out this stat
+					stats.res[ icon.attr( 'title' ) ] = {
+						val: HAX.toFloat( td.attr( 'data' ) ),
+						hasmax: 'true' == td.attr( 'hasmax' ),
+						chg: HAX.toFloat( td.attr( 'inc' ) ),
+						inc: HAX.toInt( inc_tr.find( 'td.resInc:eq(' + pos + ')' ).attr( 'data' ) ),
+						icon: '[@' + icon.attr( 'data' ) + ']'
+					};
+				} );
+
+				// find all the advanced res and store them
+				$( '#advRes td.resTxt' ).each( function() {
+					var td = $( this ), inc_tr = td.closest( 'tr' ).next( 'tr' ),
+							pos = td.prevAll( 'td.resTxt' ).length,
+							icon = td.next( 'td.resIco' ).find( '> span.resIcon:eq(0)' );
+
+					// fill out this stat
+					stats.advres[ icon.attr( 'title' ) ] = {
+						val: HAX.toFloat( td.attr( 'data' ) ),
+						hasmax: 'true' == td.attr( 'hasmax' ),
+						chg: HAX.toFloat( td.attr( 'inc' ) ),
+						inc: HAX.toInt( inc_tr.find( 'td.resInc:eq(' + pos + ')' ).attr( 'data' ) ),
+						icon: '[@' + icon.attr( 'data' ) + ']'
+					};
+				} );
+
+				// find the builds and techs
+				$( '#NextEvents' ).each( function() {
+					var wrap = $( this );
+
+					// builds rows
+					var builds = [ 'tbody tr.middle:eq(2) td:eq(1) > div', 'tbody tr.middle:eq(3) td:eq(1) > div' ];
+					$.each( builds, function( i, v ) {
+						var build = wrap.find( v );
+						if ( build.length ) {
+							var prog = build.find( '.progBarNE' ),
+									bargs = {
+										title: build.find( '> span:eq(0)' ).text(),
+										time: build.find( '.progTime' ).clone( true ),
+										prog: { style:prog.attr( 'style' ), data:prog.attr( 'data' ) }
+									},
+									parts = bargs.title.match( /^\s*Upgrading (.*?) to Level (\d+)\s*$/ );
+							bargs.building = $.isArray( parts ) && HAX.is( parts[1] ) ? parts[1] : '(Unknown)';
+							bargs.level = $.isArray( parts ) && HAX.toInt( HAX.is( parts[2] ) ? parts[2] : 0 );
+
+							// if we found an item here, then add it to our list
+							if ( bargs.title && HAX.is( bargs.time.length ) )
+								stats.build.push( bargs );
+						}
+					} );
+
+					// tech rows
+					var builds = [ 'tbody tr.middle:eq(4) td:eq(1) > div', 'tbody tr.middle:eq(5) td:eq(1) > div' ];
+					$.each( builds, function( i, v ) {
+						var tech = wrap.find( v );
+						if ( tech.length ) {
+							var prog = tech.find( '.progBarNE' )
+							stats.tech.push( {
+								title: tech.find( '> span:eq(0)' ).text(),
+								time: tech.find( '.progTime' ).clone( true ),
+								prog: { style:prog.attr( 'style' ), data:prog.attr( 'data' ) }
+							} );
+						}
+					} );
+				} );
+
+				// update these stats for the current town
+				town_stats[ 't' + CurrentTown ] = stats;
+
+				HAX.log( 'All Town Stats:', town_stats );
+
+				T.refresh_town_list();
+			};
+
+			// when the name of a town is clicked inside our overview, we need to update the current town programmatically
+			$( D ).on( 'click', '#town-overview-ui td.name div.name', function() {
+				var id = HAX.toInt( $( this ).closest( 'tr' ).data( 'id' ) );
+				if ( id )
+					ChangeTownFocus( id );
+			} );
+
+			// handle the tabs on the overview screen
+			$( D ).on( 'click', '#town-overview .tabs a', function( e ) {
+				e.preventDefault();
+				var panels = $( this ).parent( '.tabs' ).nextAll( '.panels' );
+				panels.find( $( this ).attr( 'href' ) ).siblings( '.panel' ).hide();
+				panels.find( $( this ).attr( 'href' ) ).fadeIn( 250 );
+			} );
+
+			// register a menu item to display for toggling the dialog
+			HAX.Menu.register( 'town-overview', {
+				icon: '<div class="ov-icon">OV</div>',
+				label: 'Town Overview',
+				events: {
+					click: function() {
+						var dialog = T.box(),
+								pos = HAX.LS.fetch( 'city-overview-location' ) || false,
+								css = { position:'fixed' };
+
+						// if the position was saved, then load it now
+						if ( pos && $.isPlainObject( pos ) )
+							css = $.extend( css, pos );
+
+						// toggle the visibility of the dialog
+						if ( dialog.dialog( 'isOpen' ) )
+							dialog.dialog( 'close' );
+						else
+							dialog.dialog( 'open' ).closest( '.ui-dialog' ).css( css );
+					}
+				}
+			} );
+		}
+
+		var instance;
+		// handle the singleton for this class
+		TT.get_instance = function( options ) {
+			// if the instance does not yet exist, create it
+			if ( ! HAX.is( instance ) )
+				instance = new TT();
+
+			return instance;
+		};
+
+		return TT;
+	} )();
+
+	// when on the world map page, we need to add the bookmark list icon, and the actions that control the list
+	HAX.Ajax.register( '^\/Home\/UpdateResources', function() {
+		HAX.TownTrack.get_instance().track_current_town();
+	} );
+
+	$( function() { HAX.TownTrack.get_instance().track_current_town(); } );
 } )( window, document, HAX );
   
 $( function() { $( window ).trigger( 'hashchange' ); } );
