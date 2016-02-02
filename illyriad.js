@@ -5,7 +5,6 @@
 // @version     0.9.0-beta
 // @grant       none
 // @author      HaxorOne
-// @match       http://*.illyriad.co.uk/
 // ==/UserScript==
 /* jshint -W097 */
 'use strict';
