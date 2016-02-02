@@ -122,6 +122,9 @@ I was able to improve the tool to a useable state. Also those conversations prov
 could be headed, which brought to light some major overhaul points, which turned into a complete rewrite of what I had.
 That all worked out for the best though, because it all works much smoother now.
 
+# Final Notes
+This tool is strictly browser based. It does not send or receive any information to or from any third party anything. All it does is interact with Illyriad, and save information directly to your browser for later use. As such, that means if you use two different brwosers to play on one account (like firefox at work and chrome at home), or even two different computers (like a work laptop and home desktop), you will not be able to carry your bookmarks or notes with you between the two browsers/computers. This may change down the line, but right now, it is a one browser solution, requiring no external communication at all, because I think privacy is important.
+
 # Future Features
 There are plans for other features, but by all means, please if you have an idea, submit a ticket here, and I will
 get around to it eventually, if I am not already working on it. If you do do that though, make sure to be specific.
