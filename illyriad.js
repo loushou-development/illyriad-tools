@@ -30,7 +30,15 @@ window.HAX = HAX;
 	HAX.toInt = function(val) { var n = parseInt(val); return isNaN(n) ? 0 : n; };
 	HAX.toFloat = function(val) { var n = parseFloat(val); return isNaN(n) ? 0 : n; };
 	HAX.pl = function(n, p) { return HAX.toFloat(n).toFixed(p); };
-	HAX.dist_cur_town = function( x, y ) { var dist_x = ( townX - x ), dist_y = ( townY - y ); return HAX.pl( Math.sqrt( ( dist_x * dist_x ) + ( dist_y * dist_y ) ), 2 ); };
+	HAX.dist_cur_town = function( x, y ) {
+		try {
+			var dist_x = ( townX - HAX.toInt( x ) ),
+					dist_y = ( townY - HAX.toInt( y ) );
+			return HAX.pl( Math.sqrt( ( dist_x * dist_x ) + ( dist_y * dist_y ) ), 2 );
+		} catch( e ) {
+			return -1;
+		}
+	};
 	HAX.isString = function( v ) { return 'string' == typeof v; };
 	HAX.log = function() { var args = [].slice.call( arguments ); args.unshift( 'HAX:' ); console.log.apply( console, args ); };
 	HAX.isIlly = ( function() { return W.location.hostname.match( /illyriad/ ); } )();
@@ -348,9 +356,8 @@ window.HAX = HAX;
 	}
 
 	/* when the normal tooltip pops up, we may have overrides or additions to it. this code handles that manipulation */
-	HAX.Tip = HAX._Override( 'Tip', function( run, args ) {
-		var bms_obj = HAX.BMs.get_instance(),
-				html = $( '<div>' + args[0] + '</div>' );
+	HAX.Tip = HAX._Override( 'Tip', function( run, args, cb ) {
+		var html = $( '<div>' + args[0] + '</div>' );
 
 		// run all attached callbacks
 		run.apply( this, [ html ] );
@@ -466,15 +473,16 @@ window.HAX = HAX;
 	HAX.Tip.register( function( html ) {
 		// find all world map links
 		var wm = html.find( 'a[href^="#/World/Map/"]' ),
-				hr = html.find( 'hr:eq(0)' );
+				m = wm.closest( '.m' );
 
 		// if there are any, then
 		if ( wm.length ) {
+			var pos;
 			// find the location that this link points to
 			var pos = wm.attr( 'href' ).split( /\// ).slice( 3, 5 ),
 					dist = HAX.pl( $.isArray( pos ) && HAX.is( pos[0] ) && HAX.is( pos[1] ) ? HAX.dist_cur_town( pos[0], pos[1] ) : 0, 2 );
 			if ( dist > 0 )
-				$( '<div class="distance"><strong>Distance:</strong> <em>' + dist + 'sq.</em></div>' ).insertBefore( hr );
+				$( '<div class="distance"><strong>Distance:</strong> <em>' + dist + 'sq.</em></div>' ).prependTo( m );
 		}
 	} );
 } )( window, document, HAX );
@@ -1642,6 +1650,15 @@ if ( ! HAX.hasLocalStorage ) {
 			var T = this,
 					box;
 
+			// update the resource amount text. we have to reinvent this function because the global one assumes that the maxStorage to compare is the global one
+			var innerSetRes = function(a, b) {
+				var c = (currentResTick - LastResTick) / 1e3,
+						d = new goog.i18n.NumberFormat(goog.i18n.NumberFormat.Format.DECIMAL),
+						e = parseFloat($(b).attr("data")) + parseFloat($(b).attr("inc")) * c,
+						f = HAX.toInt( $(b).attr( 'maxval' ) );
+				"true" == $(b).attr("hasmax") && f <= e && (e = f, $(b).addClass("resFull")), 0 > e && (e = 0), $(b).attr("data", e), e = e > 1e9 ? d.format((e / 1e7 | 0) / 100) + "Bn" : e > 1e6 ? d.format((e / 1e4 | 0) / 100) + "M" : d.format(0 | e), $(b).text(e), e = d = null
+			}
+
 			// override the setRes global function, so that we can update the memory stored res counts
 			HAX.SetRes.register( function() {
 				var i, j, k;
@@ -1845,13 +1862,16 @@ if ( ! HAX.hasLocalStorage ) {
 						for ( j in stats[ k ] ) if ( stats[ k ][ H ]( j ) && stats[ k ][ H ]( j ) ) {
 							var e = stats[ k ][ j ].val,
 									ico = stats[ k ][ j ].icon;
+
+							// add the displayed current value
+							keys[ k ].vals.find( '[res="' + ico + '"]' ).attr( {
+								k:j,
+								inc:stats[ k ][ j ].chg,
+								data:stats[ k ][ j ].val,
+								maxval: stats.maxStorage
+							} ).filter( '.resTxt' ).each( innerSetRes );
+
 							if ( ! stats[ k ][ j ].hasmax || e < stats.maxStorage ) {
-								// format the displayed number
-								e = e > 1e9 ? d.format((e / 1e7 | 0) / 100) + "Bn" : e > 1e6 ? d.format((e / 1e4 | 0) / 100) + "M" : d.format(0 | e)
-
-								// add the displayed current value
-								keys[ k ].vals.find( '[res="' + ico + '"]' ).attr( { k:j, inc:stats[ k ][ j ].chg, data:stats[ k ][ j ].val } ).filter( '.resTxt' ).each( innerSetRes );
-
 								// add the amoutn increased per hour, for reference
 								posneg( stats[ k ][ j ].inc, ico, keys[ k ].incs );
 
@@ -1868,9 +1888,9 @@ if ( ! HAX.hasLocalStorage ) {
 									}
 								}
 							} else {
-								tr.find( '[res="' + ico + '"]' ).text( 'max' );
-								tr2.find( '[res="' + ico + '"]' ).text( 'max' );
-								tr3.find( '[res="' + ico + '"]' ).text( 'max' );
+								keys[ k ].vals.find( '[res="' + ico + '"]' ).addClass( 'resFull' );
+								keys[ k ].incs.find( '[res="' + ico + '"]' ).addClass( 'resFull' ).text( 'max' );
+								keys[ k ].times.find( '[res="' + ico + '"]' ).addClass( 'resFull' ).text( 'max' );
 							}
 						}
 					}
@@ -1878,9 +1898,17 @@ if ( ! HAX.hasLocalStorage ) {
 					// add the builds to the list container
 					for ( i = 0; i < stats.build.length; i++ ) {
 						var build = stats.build[ i ],
-								build_cont = $( '<div class="build-wrap"></div>' ).appendTo( bl );
-						$( '<div class="tytle"></div>' ).text( build.building + ' to LVL ' + build.level ).appendTo( build_cont );
+								build_cont = $( '<div class="build-wrap"></div>' ).appendTo( bl ),
+								// when demolishing a building we need to mark that on our overview
+								build_method = 'demolishing' == build.method ? 'DEMO: ' : '';
+
+						// add the title to the overview
+						$( '<div class="tytle"></div>' ).text( build_method + build.building + ' to LVL ' + build.level ).appendTo( build_cont );
+
+						// add the timer to the overview
 						build.time.clone( true ).css( { top:9 } ).appendTo( build_cont )
+
+						// add the progress bar to the over view
 						$( '<div class="progBarNE" style="' + build.prog.style + '" data="' + build.prog.data + '"></div>' ).appendTo( build_cont ).each( innerSetNextEventsProgressCreate );
 					}
 					$( '<div class="h1f-clear"></div>' ).appendTo( bl );
@@ -1889,8 +1917,14 @@ if ( ! HAX.hasLocalStorage ) {
 					for ( i = 0; i < stats.tech.length; i++ ) {
 						var tech = stats.tech[ i ],
 								tech_cont = $( '<div class="tech-wrap"></div>' ).appendTo( bl );
+
+						// add the tech title to the overview
 						$( '<div class="tytle"></div>' ).text( tech.title ).appendTo( tech_cont );
-						tech.time.clone().css( { top:9 } ).appendTo( tech_cont )
+
+						// add the tech research timer to the overview
+						tech.time.clone().css( { top:11 } ).appendTo( tech_cont )
+
+						// add the progressbar to the overview
 						$( '<div class="progBarNE" style="' + tech.prog.style + '" data="' + tech.prog.data + '"></div>' ).appendTo( tech_cont ).each( innerSetNextEventsProgressCreate );
 					}
 					$( '<div class="h1f-clear"></div>' ).appendTo( bl );
@@ -1955,9 +1989,10 @@ if ( ! HAX.hasLocalStorage ) {
 										time: build.find( '.progTime' ).clone( true ),
 										prog: { style:prog.attr( 'style' ), data:prog.attr( 'data' ) }
 									},
-									parts = bargs.title.match( /^\s*Upgrading (.*?) to Level (\d+)\s*$/ );
-							bargs.building = $.isArray( parts ) && HAX.is( parts[1] ) ? parts[1] : '(Unknown)';
-							bargs.level = $.isArray( parts ) && HAX.toInt( HAX.is( parts[2] ) ? parts[2] : 0 );
+									parts = bargs.title.match( /^\s*(Upgrading|Demolishing) (.*?) to Level (\d+)\s*$/ );
+							bargs.method = $.isArray( parts ) && HAX.is( parts[1] ) ? parts[1].toLowerCase() : 'upgrading';
+							bargs.building = $.isArray( parts ) && HAX.is( parts[2] ) ? parts[2] : '(Unknown)';
+							bargs.level = $.isArray( parts ) && HAX.toInt( HAX.is( parts[3] ) ? parts[3] : 0 );
 
 							// if we found an item here, then add it to our list
 							if ( bargs.title && HAX.is( bargs.time.length ) )
