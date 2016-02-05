@@ -17,8 +17,7 @@ if ( ! window.jQuery ) {
 	return;
 }
 
-var HAX = $.extend( {}, HAX );
-window.HAX = HAX;
+var HAX = window.HAX = $.extend( {}, window.HAX, { VERSION:'0.9.0' } );
 
 /* Generic Required functionality */
 ( function( W, D, HAX ) {
@@ -30,15 +29,6 @@ window.HAX = HAX;
 	HAX.toInt = function(val) { var n = parseInt(val); return isNaN(n) ? 0 : n; };
 	HAX.toFloat = function(val) { var n = parseFloat(val); return isNaN(n) ? 0 : n; };
 	HAX.pl = function(n, p) { return HAX.toFloat(n).toFixed(p); };
-	HAX.dist_cur_town = function( x, y ) {
-		try {
-			var dist_x = ( townX - HAX.toInt( x ) ),
-					dist_y = ( townY - HAX.toInt( y ) );
-			return HAX.pl( Math.sqrt( ( dist_x * dist_x ) + ( dist_y * dist_y ) ), 2 );
-		} catch( e ) {
-			return -1;
-		}
-	};
 	HAX.isString = function( v ) { return 'string' == typeof v; };
 	HAX.log = function() { var args = [].slice.call( arguments ); args.unshift( 'HAX:' ); console.log.apply( console, args ); };
 	HAX.isIlly = ( function() { return W.location.hostname.match( /illyriad/ ); } )();
@@ -76,6 +66,71 @@ window.HAX = HAX;
 
 		return LS.get_instance();
 	} )();
+
+
+	// a version comparison function
+	HAX.version_compare = function( first, second ) {
+		var prepareVersion = function( v ) { v = ( '' + v ).replace( /[\-\+_]/g, '.' ).replace( /([^\.\d]+)/, '.$1.' ).replace( /\.{2,}/, '.' ); return ! v.length ? [-8] : v.split( /\./ ); },
+				vm = { 'dev': -6, 'alpha': -5, 'a': -5, 'beta': -4, 'b': -4, 'RC': -3, 'rc': -3, '#': -2, 'p': 1, 'pl': 1 },
+				v2num = function( v ) { return ! v ? 0 : ( isNaN( v ) ? vm[ v ] || -7 : HAX.toInt( v ) ); },
+				a_first = prepareVersion( first ),
+				a_second = prepareVersion( second ),
+				len = Math.max( a_first.length, a_second.length ),
+				compare = 0, i;
+
+		// cycle through the sections of the versions, and compare them
+		for ( i = 0; i < len; i++ ) {
+			// if the sections are the same, skip this section
+			if ( a_first[ i ] == a_second[ i ] )
+				continue;
+
+			// normalize the section to a number
+			a_first[ i ] = v2num( a_first[ i ] );
+			a_second[ i ] = v2num( a_second[ i ] );
+
+			// do the gt lt compare
+			if ( a_first[ i ] < a_second[ i ] ) {
+				compare = -1;
+				break;
+			} else if ( a_first[ i ] > a_second[ i ] ) {
+				compare = 1;
+				break;
+			}
+		}
+
+		return compare;
+	}
+
+	// tool for fetching the XY map position of the current town
+	HAX.town_pos = function() {
+		// if the current town pos is available in the current scope, then use it
+		if ( HAX.is( W[ 'townX' ] ) && HAX.is( W[ 'townY' ] ) )
+			return { x:townX, y:townY };
+
+		// if do not know the current town id, then we cannot do any other checks
+		if ( ! HAX.is( W[ 'CurrentTown'] ) )
+			return;
+
+		var town_stats = HAX.LS.fetch( 'town-stats' );
+		// otherwise try to look it up in our town stats list
+		if ( HAX.is( town_stats[ 't' + CurrentTown ] ) && HAX.is( town_stats[ 't' + CurrentTown ].townX ) && HAX.is( town_stats[ 't' + CurrentTown ].townY ) )
+			return { x:town_stats[ 't' + CurrentTown ].townX, y:town_stats[ 't' + CurrentTown ].townY };
+
+		// otherwise, fail
+		return;
+	};
+
+	// tool for measuring the distance from the current town to a specific map XY coordinate
+	HAX.dist_cur_town = function( x, y ) {
+		try {
+			var town = HAX.town_pos(),
+					dist_x = ( town.x - HAX.toInt( x ) ),
+					dist_y = ( town.y - HAX.toInt( y ) );
+			return HAX.pl( Math.sqrt( ( dist_x * dist_x ) + ( dist_y * dist_y ) ), 2 );
+		} catch( e ) {
+			return -1;
+		}
+	};
 
 	// callback handler. allows registration and deregistration of callbacks. allow allows triggering of them
 	HAX.callbacks = ( function() {
@@ -485,6 +540,53 @@ window.HAX = HAX;
 				$( '<div class="distance"><strong>Distance:</strong> <em>' + dist + 'sq.</em></div>' ).prependTo( m );
 		}
 	} );
+
+	// on page load, perform the version check, and pop a message if the version is out of date
+	$( function() {
+		var last_version_check = HAX.LS.fetch( 'latest-version' ) || {},
+				// function that runs the actual check. if the check fails, we pop a message saying to update
+				check_version = function() {
+					var latest = HAX.LS.fetch( 'latest-version' ),
+							comparison = HAX.version_compare( latest.VERSION, HAX.VERSION );
+
+					// if we are on a newer version or up to date, then do nothing
+					if ( comparison <= 0 )
+						return;
+
+					// otherwise pop a message saying there is an update
+					var msg = $( '<div>A new version of "<i><u>HaxorOne\'s Illyriad Tools</u></i>" is available. You currently have version <strong><em>['
+							+ HAX.VERSION + ']</em></strong> and the latest version is <strong><em>[' + latest.VERSION + ']</em></strong>. '
+							+ 'To install the update, simply replace the original code you copy and pasted, with the new code. '
+							+ 'If you need the link to those instructions, <a href="https://github.com/haxorone/illyriad-tools" target="_blank">'
+							+ 'you can find them here</a>. Enjoy.</div>' )
+						.dialog( {
+							title: "Haxorone's Illyriad Tools Update",
+							modal: true,
+							autoOpen: true,
+							position: { my:'center', at:'center', of:W },
+							maxWidth: '90%',
+							width:450,
+							minHeight:0,
+							maxHeight:'none',
+							buttons: {
+								'Got It!': function() { msg.dialog( 'close' ); }
+							},
+							close: function() { msg.dialog( 'destroy' ); }
+						} );
+				},
+				old = 604800000;
+
+		// if the version has never been checked, or the it was last checked was a long time ago, check it now
+		if ( ! HAX.is( last_version_check.last_check ) || ! HAX.is( last_version_check.VERSION ) || ( new Date() ) - ( new Date( last_version_check.last_check ) ) > old ) {
+			$.get( 'https://raw.githubusercontent.com/haxorone/illyriad-tools/master/version.js', function( r ) {
+				eval( r );
+				check_version();
+			}, 'text' );
+		// otherwise, run the check now
+		} else {
+			check_version();
+		}
+	} );
 } )( window, document, HAX );
 
 // if this is not the Illy domain, bail
@@ -703,7 +805,7 @@ if ( ! HAX.hasLocalStorage ) {
 						bms = {};
 						// apply the filter to the list of bookmarks
 						for ( j in holder ) if ( holder[ H ]( j ) ) {
-							HAX.log( 'compare', i, pairs[ i ], j, holder[ j ], field.filter( pairs[ i ], field, holder[ j ] ), holder[ j ] );
+							//HAX.log( 'compare', i, pairs[ i ], j, holder[ j ], field.filter( pairs[ i ], field, holder[ j ] ), holder[ j ] );
 							if ( field.filter( pairs[ i ], holder[ j ], field ) )
 								bms[ j ] = holder[ j ];
 						}
@@ -1163,7 +1265,7 @@ if ( ! HAX.hasLocalStorage ) {
 					}
 				} );
 
-				HAX.log( 'Filtering Bookmark List', filters );
+				//HAX.log( 'Filtering Bookmark List', filters );
 
 				// populate the list based on the filtered bookmarks
 				populate_links( bms_obj.sort( bms_obj.filter( filters ), sort_method ) );
@@ -1530,7 +1632,7 @@ if ( ! HAX.hasLocalStorage ) {
 
 	// keeps track of town resources, builds, and researches
 	HAX.TownTrack = ( function() {
-		var town_stats = {},
+		var town_stats = {}, // eventually we want to load this from cache // HAX.LS.fetch( 'town-stats' ) || {},
 				lvl_prod = {
 					'L0': { lvl:0, food:0, rez:7, tick:7/3600 },
 					'L1': { lvl:1, food:1, rez:7, tick:7/3600 },
@@ -1645,6 +1747,37 @@ if ( ! HAX.hasLocalStorage ) {
 						+ '<td class="resInc" res="[@i=3|11]"></td>' // siege blocks
 					+ '</tr></tbody>';
 
+		// we want to carry as much information as possible from session to session, so lets add a way to store all data about a town we can between sessions
+		function save_town_stats() {
+			// save the town stats
+			var TS = $.extend( true, {}, town_stats ), i;
+			// never store techs and builds in LS
+			for ( i in TS ) {
+				TS[ i ].build = [];
+				TS[ i ].tech = [];
+			}
+			//HAX.log( 'Saving All Town Stats:', TS, town_stats );
+			HAX.LS.store( 'town-stats', TS );
+		}
+
+		// update the loaded town res values based on the last tick time and change value
+		function update_town_stats() {
+			var now = ( new Date() ).getTime(), i, j, k;
+			// cycle through the towns we have on file
+			for ( i in town_stats ) if ( town_stats[ H ]( i ) ) {
+				var stats = town_stats[ i ];
+				// cycle through this town's resources, and run the updates
+				if ( HAX.is( stats.res ) ) for ( j in stats.res ) if ( stats.res[ H ]( j ) )
+					stats.res[ j ].val += ( Math.round( ( now - stats.last_tick ) / 1000 ) * stats.res[ j ].chg );
+
+				// update the last tick timer
+				stats.last_tick = now;
+			}
+
+			save_town_stats();
+		};
+		update_town_stats();
+
 		// town track guts
 		function TT() {
 			var T = this,
@@ -1661,14 +1794,8 @@ if ( ! HAX.hasLocalStorage ) {
 
 			// override the setRes global function, so that we can update the memory stored res counts
 			HAX.SetRes.register( function() {
-				var i, j, k;
-				// cycle through the towns we have on file
-				for ( i in town_stats ) if ( town_stats[ H ]( i ) ) {
-					var stats = town_stats[ i ];
-					// cycle through this town's resources, and run the updates
-					if ( HAX.is( stats.res ) ) for ( j in stats.res ) if ( stats.res[ H ]( j ) )
-						stats.res[ j ].val += stats.res[ j ].chg;
-				}
+				// update the town stats for this tick
+				update_town_stats();
 
 				var box = T.box(),
 						maxw = HAX.toInt( ( box.outerWidth( true ) / 12 ) * .8 );
@@ -1688,6 +1815,37 @@ if ( ! HAX.hasLocalStorage ) {
 				var box = T.box();
 				box.find( 'span.progTime' ).each( innerSetProgress2 );
 				box.find( 'div.progBarNE' ).each( innerSetNextEventsProgressUpdate );
+
+				// cycle through all the times, and find any that have expired. remove them if they expired more than 1 second ago
+				box.find( 'span.progTime' ).each( function() {
+					var c = $( this ).attr( "data" ).split( "|" ),
+							e = new Date( HAX.toInt( c[1] ) ),
+							f = ( e - progressNextEventsCurrentDate );
+
+					// if the item has not expired, then skip it
+					if ( f > 0 )
+						return;
+
+					// otherwise, remove the item
+					var item = $( this ).closest( '.item-wrap' ),
+							wrap_type = item.attr( 'wrap' ),
+							tr = item.closest( 'tr[data-id]' ),
+							tid = tr.data( 'id' );
+
+					// remove the item from the town information, if the town information exists (it should)
+					if ( HAX.is( town_stats[ 't' + tid ] ) ) {
+						if ( $.inArray( wrap_type, [ 'build', 'tech' ] ) >= 0 ) {
+							town_stats[ 't' + tid ][ wrap_type ] = town_stats[ 't' + tid ][ wrap_type ].slice( 1 );
+							item.remove();
+						}
+					}
+
+					// save the town data
+					save_town_stats();
+
+					// refresh the town list
+					T.refresh_town_list();
+				} );
 			} );
 
 			// get the box that holds the town overview stats
@@ -1815,12 +1973,13 @@ if ( ! HAX.hasLocalStorage ) {
 							d = new goog.i18n.NumberFormat(goog.i18n.NumberFormat.Format.DECIMAL),
 							block = $( html_basic_blocks ).appendTo( basic_table ),
 							block_adv = $( html_adv_blocks ).appendTo( adv_table ),
-							tr = block.find( 'tr.vals' ).attr( 'data-id', i.substr( 1 ) ).data( 'open', 0 ),
-							tr2 = block.find( 'tr.incs' ),
-							tr3 = block.find( 'tr.times' ),
-							tra1 = block_adv.find( 'tr.adv-vals' ),
-							tra2 = block_adv.find( 'tr.adv-incs' ),
-							trb = block.find( 'tr.build' ),
+							tid = i.substr( 1 ),
+							tr = block.find( 'tr.vals' ).attr( 'data-id', tid ).data( 'open', 0 ),
+							tr2 = block.find( 'tr.incs' ).attr( 'data-id', tid ),
+							tr3 = block.find( 'tr.times' ).attr( 'data-id', tid ),
+							tra1 = block_adv.find( 'tr.adv-vals' ).attr( 'data-id', tid ),
+							tra2 = block_adv.find( 'tr.adv-incs' ).attr( 'data-id', tid ),
+							trb = block.find( 'tr.build' ).attr( 'data-id', tid ),
 							bl = $( '<div class="build-list"></div>' ).appendTo( trb.find( 'td.builds' ) ),
 							// add the name column
 							name_col = block.add( block_adv ).find( '.name' ).html(
@@ -1868,13 +2027,15 @@ if ( ! HAX.hasLocalStorage ) {
 								k:j,
 								inc:stats[ k ][ j ].chg,
 								data:stats[ k ][ j ].val,
-								maxval: stats.maxStorage
+								maxval: stats.maxStorage,
+								hasmax: stats[ k ][ j ].hasmax ? 'true' : 'false'
 							} ).filter( '.resTxt' ).each( innerSetRes );
 
-							if ( ! stats[ k ][ j ].hasmax || e < stats.maxStorage ) {
-								// add the amoutn increased per hour, for reference
-								posneg( stats[ k ][ j ].inc, ico, keys[ k ].incs );
+							// add the amoutn increased per hour, for reference
+							posneg( stats[ k ][ j ].inc, ico, keys[ k ].incs );
 
+
+							if ( ! stats[ k ][ j ].hasmax || e < stats.maxStorage ) {
 								// add the estimated time to hit the max
 								if ( keys[ k ].times.length ) {
 									if ( stats[ k ][ j ].hasmax && stats[ k ][ j ].inc > 0 ) {
@@ -1889,7 +2050,6 @@ if ( ! HAX.hasLocalStorage ) {
 								}
 							} else {
 								keys[ k ].vals.find( '[res="' + ico + '"]' ).addClass( 'resFull' );
-								keys[ k ].incs.find( '[res="' + ico + '"]' ).addClass( 'resFull' ).text( 'max' );
 								keys[ k ].times.find( '[res="' + ico + '"]' ).addClass( 'resFull' ).text( 'max' );
 							}
 						}
@@ -1898,7 +2058,7 @@ if ( ! HAX.hasLocalStorage ) {
 					// add the builds to the list container
 					for ( i = 0; i < stats.build.length; i++ ) {
 						var build = stats.build[ i ],
-								build_cont = $( '<div class="build-wrap"></div>' ).appendTo( bl ),
+								build_cont = $( '<div wrap="build" class="item-wrap build-wrap"></div>' ).appendTo( bl ),
 								// when demolishing a building we need to mark that on our overview
 								build_method = 'demolishing' == build.method ? 'DEMO: ' : '';
 
@@ -1916,7 +2076,7 @@ if ( ! HAX.hasLocalStorage ) {
 					// add the techs to the list container
 					for ( i = 0; i < stats.tech.length; i++ ) {
 						var tech = stats.tech[ i ],
-								tech_cont = $( '<div class="tech-wrap"></div>' ).appendTo( bl );
+								tech_cont = $( '<div wrap="tech" class="item-wrap tech-wrap"></div>' ).appendTo( bl );
 
 						// add the tech title to the overview
 						$( '<div class="tytle"></div>' ).text( tech.title ).appendTo( tech_cont );
@@ -1935,12 +2095,22 @@ if ( ! HAX.hasLocalStorage ) {
 			T.track_current_town = function() {
 				var stats = {
 					name: $( '#optTown option[value="' + CurrentTown + '"]' ).text(),
-					maxStorage: maxStorage,
+					last_tick: ( new Date() ).getTime(),
 					res: {},
 					advres: {},
 					build: [],
 					tech: []
 				};
+
+				// if the max storage is available, update it now
+				if ( HAX.is( W[ 'maxStorage' ] ) )
+					stats.maxStorage = W[ 'maxStorage' ];
+
+				// if the town map coords are available, update them now
+				if ( HAX.is( W[ 'townX' ] ) && HAX.is( W[ 'townY' ] ) ) {
+					stats.townX = W[ 'townX' ];
+					stats.townY = W[ 'townY' ];
+				}
 
 				// find all the basic res and store them
 				$( '#tbRes td.resTxt' ).each( function() {
@@ -2016,9 +2186,8 @@ if ( ! HAX.hasLocalStorage ) {
 				} );
 
 				// update these stats for the current town
-				town_stats[ 't' + CurrentTown ] = stats;
-
-				HAX.log( 'All Town Stats:', town_stats );
+				town_stats[ 't' + CurrentTown ] = $.extend( true, {}, HAX.is( town_stats[ 't' + CurrentTown ] ) ? town_stats[ 't' + CurrentTown ] : {}, stats );
+				save_town_stats();
 
 				T.refresh_town_list();
 			};
