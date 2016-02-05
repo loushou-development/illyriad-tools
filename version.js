@@ -1,8 +1,9 @@
 ( function( W, D ) {
-	var CURRENT_VERSION = '0.1.0',
+	var CURRENT_VERSION = '0.9.0',
 			CHANGELOG = [
-				{ version:'0.1.0', changes:[
+				{ version:'0.9.0', changes:[
 					'Added "Distance" to popups.',
+					'Added a message that indicates when there is an update available.',
 					'Fixed maxStorage display bug, based on tips from Millia36.',
 					'Fixed "completed" build and tech bug, where they were not removed from city overview.'
 				] }
@@ -15,6 +16,8 @@
 	}
 
 	// update the last checked version and the date it was checked. also update the changelog
-	HAX.LS.store( 'latest-version', { VERSION:CURRENT_VERSION, last_check:( new Date() ).toString() } );
+	var update = { VERSION:CURRENT_VERSION, last_check:( new Date() ).toString() };
+	HAX.log( 'Version Check UPDATE: ', update );
+	HAX.LS.store( 'latest-version', update );
 	HAX.LS.store( 'latest-changelog', CHANGELOG );
 } )( window, document );
